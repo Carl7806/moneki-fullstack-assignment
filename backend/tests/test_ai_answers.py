@@ -15,7 +15,8 @@ import pytest
 import db
 from ai import chat as chat_module
 from ai.chat import chat, chat_stream
-from ai.tools import run_tool, _detect_anomalies
+from ai.tools import run_tool
+from analytics import detect_sales_anomalies
 
 
 # ---------- 假 LLM 客户端（确定性测试用，不联网） ----------
@@ -110,7 +111,7 @@ def test_product_sales_tool_matches_db():
 def test_anomaly_detection_math():
     base = [{"store_name": "A", "date": f"2026-05-{i:02d}", "revenue": 100.0} for i in range(1, 21)]
     spike = {"store_name": "A", "date": "2026-05-21", "revenue": 1000.0}
-    anomalies = _detect_anomalies(base + [spike], threshold=2.0)
+    anomalies = detect_sales_anomalies(base + [spike], threshold=2.0)
     assert anomalies
     assert anomalies[0]["date"] == "2026-05-21"
     assert anomalies[0]["deviation"] == "偏高"
@@ -124,7 +125,7 @@ def test_anomaly_detection_ignores_flat_series():
         {"store_name": "A", "date": "2026-05-03", "revenue": 100.0},
         {"store_name": "A", "date": "2026-05-04", "revenue": 100.0},
     ]
-    assert _detect_anomalies(rows) == []
+    assert detect_sales_anomalies(rows) == []
 
 
 # ---------- 确定性测试：编排链路回答数字 == 数据库 ----------
@@ -190,8 +191,9 @@ def test_anomaly_keyword_detection():
 def test_anomaly_intent_triggers_deterministic_tool():
     def final(kwargs):
         result = _tool_content(kwargs["messages"])
-        assert isinstance(result, list)
-        return _final_resp(f"检测到 {len(result)} 条营业额异常记录")
+        assert isinstance(result, dict)
+        assert result["total"] == len(result["items"])
+        return _final_resp(f"检测到 {result['total']} 条营业额异常记录")
 
     fake = FakeClient([final])
     with patch.object(chat_module, "_get_client", return_value=fake):
@@ -202,7 +204,14 @@ def test_anomaly_intent_triggers_deterministic_tool():
     # 注入的结果必须与真实 SQL 检测结果逐字一致
     expected = run_tool("get_sales_anomalies", {})
     assert out["tool_calls"][0]["result"] == expected
-    assert "1" in out["answer"] or "条" in out["answer"]
+    assert "营业额异常记录" in out["answer"]
+
+
+def test_anomaly_tool_returns_total_and_items():
+    result = run_tool("get_sales_anomalies", {})
+    assert set(result) == {"total", "items"}
+    assert result["total"] == len(result["items"])
+    assert result["items"] == detect_sales_anomalies(db.get_store_daily_revenue())
 
 
 # ---------- 集成测试：真实 DeepSeek（需 DEEPSEEK_API_KEY） ----------
