@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import db
 from ai.chat import chat as ai_chat
 from ai.chat import chat_stream, sse
+from analytics import detect_sales_anomalies
 
 app = FastAPI(title="Moneki 餐饮看板 API")
 
@@ -71,6 +72,19 @@ def top10(start: str = None, end: str = None):
     if start and end and start > end:
         return {"error": "start 不能晚于 end"}, 400
     return db.get_top10(start, end)
+
+
+@app.get("/api/dashboard/anomalies")
+def anomalies(start: str = None, end: str = None):
+    try:
+        start = _validate_date(start, "start")
+        end = _validate_date(end, "end")
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    if start and end and start > end:
+        return {"error": "start 不能晚于 end"}, 400
+    items = detect_sales_anomalies(db.get_store_daily_revenue(start, end))
+    return {"total": len(items), "threshold": 2.0, "items": items}
 
 
 class ChatRequest(BaseModel):
