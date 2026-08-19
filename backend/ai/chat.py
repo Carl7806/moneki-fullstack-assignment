@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from .tools import TOOLS, run_tool
+from .tools import TOOLS, run_tool, wants_anomaly_check
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -45,6 +45,31 @@ def _get_client():
     return OpenAI(api_key=api_key, base_url=BASE_URL)
 
 
+def _anomaly_seed(user_message):
+    """预警意图确定性触发：直接执行真实 SQL，把结果作为工具消息预注入，
+    规避 LLM 对「异常/预警」这类意图的工具选择不稳定，数字仍来自数据库。
+    """
+    if not wants_anomaly_check(user_message):
+        return [], []
+    result = run_tool("get_sales_anomalies", {})
+    assistant_msg = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": "anomaly_seed",
+            "type": "function",
+            "function": {"name": "get_sales_anomalies", "arguments": "{}"},
+        }],
+    }
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": "anomaly_seed",
+        "content": json.dumps(result, ensure_ascii=False),
+    }
+    log = [{"tool": "get_sales_anomalies", "args": {}, "result": result}]
+    return [assistant_msg, tool_msg], log
+
+
 def chat(user_message, history=None):
     """执行一次对话。history 为 [{"role":"user"|"assistant","content":...}, ...] 可选。
 
@@ -56,7 +81,8 @@ def chat(user_message, history=None):
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
-    tool_calls_log = []
+    seed_msgs, tool_calls_log = _anomaly_seed(user_message)
+    messages.extend(seed_msgs)
 
     for _ in range(MAX_TOOL_ROUNDS):
         resp = client.chat.completions.create(
@@ -94,3 +120,62 @@ def chat(user_message, history=None):
         "answer": "抱歉，问题需要多次查询仍未收敛，请换个更具体的问题。",
         "tool_calls": tool_calls_log,
     }
+
+
+def sse(data):
+    """把 dict 编码为一条 SSE 事件（data 行 + 空行分隔）。"""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def chat_stream(user_message, history=None):
+    """流式版对话：工具调用阶段非流式（发 status 事件），最终答案逐字流式返回。
+
+    生成的事件类型：
+    - {"type": "status", "tool": ..., "args": ...}   开始查询某个工具
+    - {"type": "delta", "content": "..."}            答案片段
+    - {"type": "done", "tool_calls": [...]}          结束，附带完整工具调用记录
+    """
+    client = _get_client()
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    seed_msgs, tool_calls_log = _anomaly_seed(user_message)
+    if seed_msgs:
+        yield sse({"type": "status", "tool": "get_sales_anomalies", "args": {}})
+    messages.extend(seed_msgs)
+
+    # 非流式循环：直到模型不再要求调用工具
+    for _ in range(MAX_TOOL_ROUNDS):
+        resp = client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS)
+        msg = resp.choices[0].message
+        if not msg.tool_calls:
+            break
+        messages.append(msg)
+        for tc in msg.tool_calls:
+            fn_name = tc.function.name
+            try:
+                fn_args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                fn_args = {}
+            yield sse({"type": "status", "tool": fn_name, "args": fn_args})
+            try:
+                result = run_tool(fn_name, fn_args)
+            except ValueError as e:
+                result = {"error": str(e)}
+            tool_calls_log.append({"tool": fn_name, "args": fn_args, "result": result})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+
+    # 流式输出最终答案（不带 tools，避免再次触发工具调用）
+    stream = client.chat.completions.create(model=MODEL, messages=messages, stream=True)
+    for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield sse({"type": "delta", "content": delta.content})
+
+    yield sse({"type": "done", "tool_calls": tool_calls_log})

@@ -176,3 +176,22 @@ def get_product_sales(product_name, start=None, end=None):
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_store_daily_revenue(start=None, end=None):
+    """每家店每日营业额（供异常检测与趋势分析）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cond, params = _date_range(start, end, alias="s")
+    q = f"""
+        SELECT st.store_name, s.date, ROUND(SUM(s.amount), 2) AS revenue
+        FROM sales s
+        JOIN stores st ON s.store_id = st.store_id
+        {cond}
+        GROUP BY s.store_id, s.date
+        ORDER BY s.store_id, s.date
+    """
+    cur.execute(q, params)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

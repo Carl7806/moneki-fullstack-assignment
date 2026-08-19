@@ -7,10 +7,12 @@ from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import db
 from ai.chat import chat as ai_chat
+from ai.chat import chat_stream, sse
 
 app = FastAPI(title="Moneki 餐饮看板 API")
 
@@ -83,3 +85,15 @@ def chat_endpoint(req: ChatRequest):
         return result
     except RuntimeError as e:
         return {"error": str(e), "answer": None, "tool_calls": []}, 500
+
+
+@app.post("/api/chat/stream")
+def chat_stream_endpoint(req: ChatRequest):
+    def gen():
+        try:
+            for chunk in chat_stream(req.message, req.history):
+                yield chunk
+        except RuntimeError as e:
+            yield sse({"type": "error", "message": str(e)})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
