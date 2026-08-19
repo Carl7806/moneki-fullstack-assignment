@@ -18,7 +18,9 @@
       </div>
 
       <div v-for="(m, i) in messages" :key="i" class="chat__msg" :class="`chat__msg--${m.role}`">
-        <div class="chat__bubble">{{ m.content }}</div>
+        <div class="chat__bubble">
+          <span v-if="m.role === 'assistant' && m.querying" class="chat__querying">{{ m.querying }}</span>{{ m.content }}
+        </div>
         <details v-if="m.role === 'assistant' && m.tools && m.tools.length" class="chat__sources">
           <summary>查看数据来源（{{ m.tools.length }}）</summary>
           <div v-for="(t, j) in m.tools" :key="j" class="chat__source">
@@ -27,10 +29,6 @@
             <div class="chat__source-result">结果：{{ pretty(t.result) }}</div>
           </div>
         </details>
-      </div>
-
-      <div v-if="loading" class="chat__msg chat__msg--assistant">
-        <div class="chat__bubble chat__bubble--loading">正在查询数据…</div>
       </div>
     </div>
 
@@ -48,7 +46,6 @@
 
 <script setup>
 import { ref, nextTick } from 'vue'
-import { fetchChat } from '../api.js'
 
 const TOOL_LABELS = {
   get_revenue_summary: '营业额汇总',
@@ -56,6 +53,7 @@ const TOOL_LABELS = {
   get_category_ranking: '品类排行',
   get_product_sales: '单品销售',
   get_daily_trend: '每日趋势',
+  get_sales_anomalies: '异常销售预警',
 }
 
 const messages = ref([])
@@ -86,23 +84,62 @@ async function send() {
   if (!text || loading.value) return
   draft.value = ''
   messages.value.push({ role: 'user', content: text })
+
+  const history = messages.value
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(0, -1)
+    .map(({ role, content }) => ({ role, content }))
+
+  const assistantMsg = { role: 'assistant', content: '', tools: [], querying: '正在分析…' }
+  messages.value.push(assistantMsg)
   loading.value = true
   await scrollBottom()
+
   try {
-    const history = messages.value
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(0, -1)
-      .map(({ role, content }) => ({ role, content }))
-    const data = await fetchChat(text, history)
-    messages.value.push({
-      role: 'assistant',
-      content: data.answer || data.error || '（无回答）',
-      tools: data.tool_calls || [],
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history }),
     })
+    if (!res.ok || !res.body) {
+      throw new Error(res.ok ? '无响应流' : `HTTP ${res.status}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const raw = buf.slice(0, idx).trim()
+        buf = buf.slice(idx + 2)
+        if (!raw.startsWith('data:')) continue
+        let data
+        try {
+          data = JSON.parse(raw.slice(5).trim())
+        } catch {
+          continue
+        }
+        if (data.type === 'status') {
+          assistantMsg.querying = `正在查询「${toolLabel(data.tool)}」…`
+        } else if (data.type === 'delta') {
+          if (assistantMsg.querying) assistantMsg.querying = ''
+          assistantMsg.content += data.content
+        } else if (data.type === 'done') {
+          assistantMsg.tools = data.tool_calls || []
+        } else if (data.type === 'error') {
+          assistantMsg.content = '出错了：' + data.message
+        }
+        await scrollBottom()
+      }
+    }
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: '出错了：' + (e.message || e) })
+    assistantMsg.content = assistantMsg.content || ('出错了：' + (e.message || e))
   } finally {
     loading.value = false
+    assistantMsg.querying = ''
     await scrollBottom()
   }
 }
@@ -180,8 +217,14 @@ async function send() {
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
 }
-.chat__bubble--loading {
+.chat__querying {
   color: var(--text-2);
+  display: inline-block;
+  margin-right: 6px;
+  animation: chat-blink 1.2s infinite;
+}
+@keyframes chat-blink {
+  50% { opacity: 0.4; }
 }
 .chat__sources {
   margin-top: 6px;
