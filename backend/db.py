@@ -28,11 +28,14 @@ def _date_range(start, end, alias=None):
     return cond, params
 
 
-def get_summary(start=None, end=None):
-    """总营业额（含退款）、订单数（正金额）、退款额。"""
+def get_summary(start=None, end=None, store_id=None):
+    """总营业额（含退款）、订单数（正金额）、退款额，可选门店过滤。"""
     conn = get_conn()
     cur = conn.cursor()
     cond, params = _date_range(start, end)
+    if store_id:
+        cond = f"{cond} AND store_id = ?" if cond else "WHERE store_id = ?"
+        params = list(params) + [store_id]
     q = f"""
         SELECT ROUND(SUM(amount), 2) AS revenue,
                COUNT(DISTINCT CASE WHEN amount > 0 THEN order_id END) AS orders,
@@ -97,6 +100,77 @@ def get_top10(start=None, end=None):
         GROUP BY s.product_id
         ORDER BY revenue DESC
         LIMIT 10
+    """
+    cur.execute(q, params)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_store_ranking(start=None, end=None):
+    """各门店营业额排行（JOIN 门店表取经营品类/地段）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cond, params = _date_range(start, end, alias="s")
+    q = f"""
+        SELECT st.store_name, st.category, st.district,
+               ROUND(SUM(s.amount), 2) AS revenue,
+               COUNT(DISTINCT CASE WHEN s.amount > 0 THEN s.order_id END) AS orders
+        FROM sales s
+        JOIN stores st ON s.store_id = st.store_id
+        {cond}
+        GROUP BY s.store_id
+        ORDER BY revenue DESC
+    """
+    cur.execute(q, params)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_category_ranking(start=None, end=None):
+    """各商品品类营业额排行（JOIN 商品表取品类）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cond, params = _date_range(start, end, alias="s")
+    q = f"""
+        SELECT p.product_category,
+               ROUND(SUM(s.amount), 2) AS revenue,
+               ROUND(SUM(s.qty), 2) AS qty
+        FROM sales s
+        JOIN products p ON s.product_id = p.product_id
+        {cond}
+        GROUP BY p.product_category
+        ORDER BY revenue DESC
+    """
+    cur.execute(q, params)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_product_sales(product_name, start=None, end=None):
+    """单品销售查询：先精确匹配商品名，再模糊匹配（可能存在多商品命中）。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cond_date, params = _date_range(start, end, alias="s")
+    if cond_date:
+        cond_date = cond_date.replace("WHERE", "AND", 1)
+
+    cond_name = "AND p.product_name LIKE ?"
+    conds = [cond_date, cond_name] if cond_date else [cond_name]
+    params = params + [f"%{product_name}%"]
+
+    q = f"""
+        SELECT p.product_name, p.product_category, p.unit_price,
+               ROUND(SUM(s.amount), 2) AS revenue,
+               ROUND(SUM(s.qty), 2) AS qty,
+               COUNT(DISTINCT CASE WHEN s.amount > 0 THEN s.order_id END) AS orders
+        FROM sales s
+        JOIN products p ON s.product_id = p.product_id
+        WHERE 1=1 {" ".join(conds)}
+        GROUP BY p.product_id
+        ORDER BY revenue DESC
     """
     cur.execute(q, params)
     rows = cur.fetchall()

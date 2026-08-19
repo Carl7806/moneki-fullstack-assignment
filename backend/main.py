@@ -3,9 +3,14 @@
 启动：uvicorn main:app --reload --port 8000
 """
 import re
+from typing import Optional
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 import db
+from ai.chat import chat as ai_chat
 
 app = FastAPI(title="Moneki 餐饮看板 API")
 
@@ -64,3 +69,17 @@ def top10(start: str = None, end: str = None):
     if start and end and start > end:
         return {"error": "start 不能晚于 end"}, 400
     return db.get_top10(start, end)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[list[dict]] = None
+
+
+@app.post("/api/chat")
+def chat_endpoint(req: ChatRequest):
+    try:
+        result = ai_chat(req.message, req.history)
+        return result
+    except RuntimeError as e:
+        return {"error": str(e), "answer": None, "tool_calls": []}, 500
