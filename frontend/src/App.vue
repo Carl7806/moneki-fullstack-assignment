@@ -41,6 +41,8 @@
     <RevenueChart :data="daily" />
 
     <TopProducts :data="top10" />
+
+    <ChatPanel />
   </div>
 </template>
 
@@ -49,6 +51,7 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import KpiCard from './components/KpiCard.vue'
 import RevenueChart from './components/RevenueChart.vue'
 import TopProducts from './components/TopProducts.vue'
+import ChatPanel from './components/ChatPanel.vue'
 import { fetchSummary, fetchDaily, fetchTop10 } from './api.js'
 
 const DATA_START = '2026-05-01'

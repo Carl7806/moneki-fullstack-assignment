@@ -21,3 +21,14 @@ function buildQuery(params = {}) {
 export const fetchSummary = (params) => get(`/dashboard/summary${buildQuery(params)}`)
 export const fetchDaily = (params) => get(`/dashboard/daily${buildQuery(params)}`)
 export const fetchTop10 = (params) => get(`/dashboard/top10${buildQuery(params)}`)
+
+export async function fetchChat(message, history) {
+  const res = await fetch(`${BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, history }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `请求失败 (HTTP ${res.status})`)
+  return data
+}
