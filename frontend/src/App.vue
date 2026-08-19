@@ -42,6 +42,8 @@
 
     <TopProducts :data="top10" />
 
+    <AnomalyPanel :data="anomalies" />
+
     <ChatPanel />
   </div>
 </template>
@@ -51,8 +53,9 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import KpiCard from './components/KpiCard.vue'
 import RevenueChart from './components/RevenueChart.vue'
 import TopProducts from './components/TopProducts.vue'
+import AnomalyPanel from './components/AnomalyPanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
-import { fetchSummary, fetchDaily, fetchTop10 } from './api.js'
+import { fetchSummary, fetchDaily, fetchTop10, fetchAnomalies } from './api.js'
 
 const DATA_START = '2026-05-01'
 const DATA_END = '2026-07-31'
@@ -62,6 +65,7 @@ const end = ref(DATA_END)
 const summary = reactive({ revenue: 0, orders: 0, avg_ticket: 0, refund: 0 })
 const daily = ref([])
 const top10 = ref([])
+const anomalies = reactive({ total: 0, threshold: 2.0, items: [] })
 const error = ref('')
 
 const quickRanges = [
@@ -90,14 +94,16 @@ async function load() {
   error.value = ''
   const params = { start: start.value, end: end.value }
   try {
-    const [s, d, t] = await Promise.all([
+    const [s, d, t, a] = await Promise.all([
       fetchSummary(params),
       fetchDaily(params),
       fetchTop10(params),
+      fetchAnomalies(params),
     ])
     Object.assign(summary, s)
     daily.value = d
     top10.value = t
+    Object.assign(anomalies, a)
   } catch (e) {
     error.value = e.message || '加载失败'
   }

@@ -21,6 +21,7 @@ function buildQuery(params = {}) {
 export const fetchSummary = (params) => get(`/dashboard/summary${buildQuery(params)}`)
 export const fetchDaily = (params) => get(`/dashboard/daily${buildQuery(params)}`)
 export const fetchTop10 = (params) => get(`/dashboard/top10${buildQuery(params)}`)
+export const fetchAnomalies = (params) => get(`/dashboard/anomalies${buildQuery(params)}`)
 
 export async function fetchChat(message, history) {
   const res = await fetch(`${BASE}/chat`, {
