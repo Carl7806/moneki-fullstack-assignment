@@ -30,7 +30,7 @@ SYSTEM_PROMPT = """你是连锁餐饮品牌「Moneki」的运营数据分析助�
 - 商品品类：主食、点心、小食、饮料
 
 回答规则：
-1. 每个数字都必须来自工具查询结果。工具返回什么就说什么，不得四舍五入虚构、不得外推编造。
+1. 每个数字都必须来自工具查询结果。工具返回什么就说什么，不得四舍五入虚构、不得外推编造。get_sales_anomalies 返回的 total 字段即异常条数，直接引用 total，不要自行数 items 的个数。
 2. 相对时间要换算成绝对日期：「六月」= 2026-06-01 到 2026-06-30；「上半年」= 2026-05-01 到 2026-06-30；「最近/近一个月」= 2026-07-01 到 2026-07-31；「全程/总共」= 不传日期。
 3. 判断涨跌时，用工具返回的逐日/前后数字对比，明确说「从 X 涨到 Y」或「从 X 跌到 Y」，给出具体数值。
 4. 若工具返回空数据，或用户问的是数据里不存在的维度/商品，直接回答「数据里没有相关记录」，不要编造。
@@ -43,6 +43,15 @@ def _get_client():
     if not api_key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY，请在 backend/.env 里设置")
     return OpenAI(api_key=api_key, base_url=BASE_URL)
+
+
+def _build_messages(user_message, history):
+    """组装 system + 历史 + 当前用户消息。"""
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+    return messages
 
 
 def _anomaly_seed(user_message):
@@ -70,17 +79,40 @@ def _anomaly_seed(user_message):
     return [assistant_msg, tool_msg], log
 
 
+def _execute_tool_calls(messages, msg, tool_calls_log):
+    """执行一条 assistant 消息里的全部工具调用，把结果回填并记录。
+
+    返回本次触发的事件列表 [{"tool","args"}, ...]，供流式端点发 status 事件。
+    """
+    events = []
+    messages.append(msg)
+    for tc in msg.tool_calls:
+        fn_name = tc.function.name
+        try:
+            fn_args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            fn_args = {}
+        try:
+            result = run_tool(fn_name, fn_args)
+        except ValueError as e:
+            result = {"error": str(e)}
+        tool_calls_log.append({"tool": fn_name, "args": fn_args, "result": result})
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tc.id,
+            "content": json.dumps(result, ensure_ascii=False),
+        })
+        events.append({"tool": fn_name, "args": fn_args})
+    return events
+
+
 def chat(user_message, history=None):
     """执行一次对话。history 为 [{"role":"user"|"assistant","content":...}, ...] 可选。
 
     返回 {"answer": str, "tool_calls": [{"tool","args","result"}]}
     """
     client = _get_client()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
-
+    messages = _build_messages(user_message, history)
     seed_msgs, tool_calls_log = _anomaly_seed(user_message)
     messages.extend(seed_msgs)
 
@@ -91,35 +123,11 @@ def chat(user_message, history=None):
             tools=TOOLS,
         )
         msg = resp.choices[0].message
-
         if not msg.tool_calls:
-            return {
-                "answer": msg.content or "",
-                "tool_calls": tool_calls_log,
-            }
+            return {"answer": msg.content or "", "tool_calls": tool_calls_log}
+        _execute_tool_calls(messages, msg, tool_calls_log)
 
-        messages.append(msg)
-        for tc in msg.tool_calls:
-            fn_name = tc.function.name
-            try:
-                fn_args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                fn_args = {}
-            try:
-                result = run_tool(fn_name, fn_args)
-            except ValueError as e:
-                result = {"error": str(e)}
-            tool_calls_log.append({"tool": fn_name, "args": fn_args, "result": result})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": json.dumps(result, ensure_ascii=False),
-            })
-
-    return {
-        "answer": "抱歉，问题需要多次查询仍未收敛，请换个更具体的问题。",
-        "tool_calls": tool_calls_log,
-    }
+    return {"answer": "抱歉，问题需要多次查询仍未收敛，请换个更具体的问题。", "tool_calls": tool_calls_log}
 
 
 def sse(data):
@@ -136,11 +144,7 @@ def chat_stream(user_message, history=None):
     - {"type": "done", "tool_calls": [...]}          结束，附带完整工具调用记录
     """
     client = _get_client()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
-
+    messages = _build_messages(user_message, history)
     seed_msgs, tool_calls_log = _anomaly_seed(user_message)
     if seed_msgs:
         yield sse({"type": "status", "tool": "get_sales_anomalies", "args": {}})
@@ -152,24 +156,8 @@ def chat_stream(user_message, history=None):
         msg = resp.choices[0].message
         if not msg.tool_calls:
             break
-        messages.append(msg)
-        for tc in msg.tool_calls:
-            fn_name = tc.function.name
-            try:
-                fn_args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                fn_args = {}
-            yield sse({"type": "status", "tool": fn_name, "args": fn_args})
-            try:
-                result = run_tool(fn_name, fn_args)
-            except ValueError as e:
-                result = {"error": str(e)}
-            tool_calls_log.append({"tool": fn_name, "args": fn_args, "result": result})
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": json.dumps(result, ensure_ascii=False),
-            })
+        for evt in _execute_tool_calls(messages, msg, tool_calls_log):
+            yield sse({"type": "status", **evt})
 
     # 流式输出最终答案（不带 tools，避免再次触发工具调用）
     stream = client.chat.completions.create(model=MODEL, messages=messages, stream=True)

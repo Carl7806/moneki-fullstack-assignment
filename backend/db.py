@@ -12,6 +12,24 @@ def get_conn():
     return conn
 
 
+def _fetch_all(query, params=()):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def _fetch_one(query, params=()):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(query, params)
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def _date_range(start, end, alias=None):
     col = f"{alias}.date" if alias else "date"
     params = []
@@ -30,8 +48,6 @@ def _date_range(start, end, alias=None):
 
 def get_summary(start=None, end=None, store_id=None):
     """总营业额（含退款）、订单数（正金额）、退款额，可选门店过滤。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end)
     if store_id:
         cond = f"{cond} AND store_id = ?" if cond else "WHERE store_id = ?"
@@ -42,9 +58,7 @@ def get_summary(start=None, end=None, store_id=None):
                ROUND(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 2) AS refund
         FROM sales {cond}
     """
-    cur.execute(q, params)
-    row = cur.fetchone()
-    conn.close()
+    row = _fetch_one(q, params)
     revenue = row["revenue"] or 0.0
     orders = row["orders"] or 0
     refund = row["refund"] or 0.0
@@ -58,8 +72,6 @@ def get_summary(start=None, end=None, store_id=None):
 
 def get_daily(start=None, end=None):
     """每日营业额、订单数、客单价（趋势图）。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end)
     q = f"""
         SELECT date,
@@ -69,9 +81,7 @@ def get_daily(start=None, end=None):
         GROUP BY date
         ORDER BY date
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
+    rows = _fetch_all(q, params)
     out = []
     for r in rows:
         revenue = r["revenue"] or 0.0
@@ -87,8 +97,6 @@ def get_daily(start=None, end=None):
 
 def get_top10(start=None, end=None):
     """Top10 商品（按净营业额），JOIN 商品维表取名称/品类。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end, alias="s")
     q = f"""
         SELECT p.product_name, p.product_category,
@@ -101,16 +109,11 @@ def get_top10(start=None, end=None):
         ORDER BY revenue DESC
         LIMIT 10
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in _fetch_all(q, params)]
 
 
 def get_store_ranking(start=None, end=None):
     """各门店营业额排行（JOIN 门店表取经营品类/地段）。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end, alias="s")
     q = f"""
         SELECT st.store_name, st.category, st.district,
@@ -122,16 +125,11 @@ def get_store_ranking(start=None, end=None):
         GROUP BY s.store_id
         ORDER BY revenue DESC
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in _fetch_all(q, params)]
 
 
 def get_category_ranking(start=None, end=None):
     """各商品品类营业额排行（JOIN 商品表取品类）。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end, alias="s")
     q = f"""
         SELECT p.product_category,
@@ -143,16 +141,11 @@ def get_category_ranking(start=None, end=None):
         GROUP BY p.product_category
         ORDER BY revenue DESC
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in _fetch_all(q, params)]
 
 
 def get_product_sales(product_name, start=None, end=None):
     """单品销售查询：先精确匹配商品名，再模糊匹配（可能存在多商品命中）。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond_date, params = _date_range(start, end, alias="s")
     if cond_date:
         cond_date = cond_date.replace("WHERE", "AND", 1)
@@ -172,16 +165,11 @@ def get_product_sales(product_name, start=None, end=None):
         GROUP BY p.product_id
         ORDER BY revenue DESC
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in _fetch_all(q, params)]
 
 
 def get_store_daily_revenue(start=None, end=None):
     """每家店每日营业额（供异常检测与趋势分析）。"""
-    conn = get_conn()
-    cur = conn.cursor()
     cond, params = _date_range(start, end, alias="s")
     q = f"""
         SELECT st.store_name, s.date, ROUND(SUM(s.amount), 2) AS revenue
@@ -191,7 +179,4 @@ def get_store_daily_revenue(start=None, end=None):
         GROUP BY s.store_id, s.date
         ORDER BY s.store_id, s.date
     """
-    cur.execute(q, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in _fetch_all(q, params)]

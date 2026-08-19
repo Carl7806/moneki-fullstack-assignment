@@ -3,12 +3,10 @@
 所有工具都走真实 SQL（见 db.py），LLM 只负责选工具、传参，
 数字一律来自数据库查询结果，绝不编造。
 """
-import json
 import re
-from collections import defaultdict
-from statistics import mean, stdev
 
 import db
+from analytics import detect_sales_anomalies
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -118,6 +116,7 @@ TOOLS = [
             "description": (
                 "检测各门店每日营业额异常（z-score：当日营业额偏离该店历史均值超过 2 个标准差）。"
                 "适合回答「哪家店最近销量/营业额有异常」「有没有数据异常」等预警类问题。"
+                "返回 {total: 异常条数, items: 异常明细}，回答案时直接引用 total，不要自行数 items。"
             ),
             "parameters": {
                 "type": "object",
@@ -145,35 +144,6 @@ def _check_range(start, end):
     if start and end and start > end:
         raise ValueError(f"start_date({start}) 不能晚于 end_date({end})")
     return start, end
-
-
-def _detect_anomalies(rows, threshold=2.0):
-    """对每家店每日营业额做 z-score 异常检测，返回 |z|>=threshold 的记录。"""
-    by_store = defaultdict(list)
-    for r in rows:
-        by_store[r["store_name"]].append(r)
-
-    anomalies = []
-    for store, recs in by_store.items():
-        revenues = [r["revenue"] for r in recs]
-        if len(revenues) < 5:
-            continue
-        mu = mean(revenues)
-        sd = stdev(revenues)
-        if sd == 0:
-            continue
-        for r in recs:
-            z = (r["revenue"] - mu) / sd
-            if abs(z) >= threshold:
-                anomalies.append({
-                    "store_name": store,
-                    "date": r["date"],
-                    "revenue": r["revenue"],
-                    "z_score": round(z, 2),
-                    "deviation": "偏高" if z > 0 else "偏低",
-                })
-    anomalies.sort(key=lambda x: -abs(x["z_score"]))
-    return anomalies
 
 
 def run_tool(name, args):
@@ -205,6 +175,7 @@ def run_tool(name, args):
 
     if name == "get_sales_anomalies":
         start, end = _check_range(args.get("start_date"), args.get("end_date"))
-        return _detect_anomalies(db.get_store_daily_revenue(start, end))
+        items = detect_sales_anomalies(db.get_store_daily_revenue(start, end))
+        return {"total": len(items), "items": items}
 
     raise ValueError(f"未知工具：{name}")
