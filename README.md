@@ -5,7 +5,7 @@
 - **数据看板**：KPI 指标卡、营业额趋势、Top10 商品、门店排行、品类排行、异常销售预警，支持日期区间 + 门店筛选，一键导出 CSV
 - **AI 问答**：对话式提问，答案中的所有数字都来自 SQL 查询结果，LLM 不接触原始 CSV、不凭记忆编造
 - **图表联动**：AI 回答时，前端看板自动跳转到该问题涉及的日期区间 / 门店
-- **可测试**：AI 回答配有自动化测试（确定性 + 数学验证 + 真实集成），保证「数字可信」
+- **可测试**：AI 回答配有自动化测试（确定性 + API 契约 + 数学验证 + 真实集成），保证「数字可信」
 
 仓库地址：https://github.com/Carl7806/moneki-fullstack-assignment
 
@@ -148,7 +148,9 @@ moneki-fullstack-assignment/
 │   │   ├── chat.py              # AI 编排：工具选择→SQL→回填→生成 + focus 推导 + 防注入
 │   │   └── tools.py             # 6 个工具定义与分发（全部走真实 SQL）
 │   ├── tests/
-│   │   └── test_ai_answers.py   # AI 回答自动化测试（39 个用例）
+│   │   ├── conftest.py          # pytest 配置（把 backend 加入 sys.path）
+│   │   ├── test_ai_answers.py   # AI 回答自动化测试（确定性 20 + 集成 2）
+│   │   └── test_api.py          # API 契约测试（17 个，FastAPI TestClient）
 │   ├── requirements.txt
 │   ├── pytest.ini
 │   └── .env.example             # DEEPSEEK_API_KEY 模板
@@ -209,10 +211,11 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-共 **39 个用例**，覆盖两类：
+共 **39 个用例**（`test_ai_answers.py` 22 个 + `test_api.py` 17 个），覆盖三类：
 
-1. **确定性测试**（不联网，用假 LLM 客户端）：工具 = 真实 SQL、异常检测数学验证、focus 推导、门店过滤口径。
-2. **集成测试**（需 `DEEPSEEK_API_KEY`）：真实调用模型，抽取回答中的数字与数据库逐项比对，验证「回答 ≠ 编造」。
+1. **确定性测试**（`test_ai_answers.py`，不联网，用假 LLM 客户端）：工具 = 真实 SQL、异常检测数学验证、focus 推导、门店过滤、历史清洗、限流等口径。
+2. **API 契约测试**（`test_api.py`，不联网，FastAPI TestClient）：覆盖全部 `/api/dashboard/*` 与 `/api/chat` 端点的返回结构、日期校验、CSV 导出、限流与长度限制。
+3. **集成测试**（`test_ai_answers.py`，需 `DEEPSEEK_API_KEY`）：真实调用模型，抽取回答中的数字与数据库逐项比对，验证「回答 ≠ 编造」。
 
 ---
 
