@@ -1,6 +1,7 @@
 """数据库访问层：所有看板 SQL 集中在此，供 API 与 AI 工具复用。"""
 import os
 import sqlite3
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "app.db")
@@ -52,6 +53,17 @@ def _store_filter(cond, params, store_id, alias=None):
         cond = f"{cond} AND {col} = ?" if cond else f"WHERE {col} = ?"
         params = list(params) + [store_id]
     return cond, params
+
+
+def get_data_meta():
+    """数据集元信息：最晚/最早交易日期 + 数据库文件的生成时间（ETL 最后运行时间）。"""
+    row = _fetch_one("SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM sales")
+    generated_at = datetime.fromtimestamp(os.path.getmtime(DB_PATH)).isoformat(sep=" ", timespec="seconds")
+    return {
+        "min_date": row["min_date"],
+        "max_date": row["max_date"],
+        "generated_at": generated_at,
+    }
 
 
 def get_stores():

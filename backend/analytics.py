@@ -12,6 +12,9 @@ DEFAULT_THRESHOLD = 3.0
 # 使 MAD 在正态分布下与标准差可比（约 1.4826 的倒数）
 SCALE_FACTOR = 0.6745
 
+# 每家店至少需要这么多天的观测才做异常检测，样本过少时 MAD/中位数不可靠
+MIN_SAMPLES = 5
+
 
 def _median_and_mad(values):
     med = median(values)
@@ -19,20 +22,25 @@ def _median_and_mad(values):
     return med, mad
 
 
-def detect_sales_anomalies(rows, threshold=DEFAULT_THRESHOLD):
-    """对每家店每日营业额做 MAD 修正 z-score 异常检测。
+def _detect(rows, threshold):
+    """核心检测逻辑，返回 (anomalies, skipped)。
 
-    rows 每条需含 store_id / store_name / date / revenue 字段。
-    返回 |z| >= threshold 的记录（按 |z| 降序）。
+    skipped 记录样本不足被跳过的门店：MAD/中位数需要足够观测才稳健。
     """
     by_store = defaultdict(list)
     for r in rows:
         by_store[r["store_id"]].append(r)
 
     anomalies = []
+    skipped = []
     for store_id, recs in by_store.items():
         revenues = [r["revenue"] for r in recs]
-        if len(revenues) < 5:
+        if len(revenues) < MIN_SAMPLES:
+            skipped.append({
+                "store_id": store_id,
+                "store_name": recs[0]["store_name"],
+                "samples": len(revenues),
+            })
             continue
         med, mad = _median_and_mad(revenues)
         # MAD 为 0（过半观测都等于中位数）时退化到标准差尺度，避免除 0
@@ -53,4 +61,23 @@ def detect_sales_anomalies(rows, threshold=DEFAULT_THRESHOLD):
                     "deviation": "偏高" if z > 0 else "偏低",
                 })
     anomalies.sort(key=lambda x: -abs(x["z_score"]))
+    return anomalies, skipped
+
+
+def detect_sales_anomalies(rows, threshold=DEFAULT_THRESHOLD):
+    """对每家店每日营业额做 MAD 修正 z-score 异常检测。
+
+    rows 每条需含 store_id / store_name / date / revenue 字段。
+    返回 |z| >= threshold 的记录（按 |z| 降序）。
+    """
+    anomalies, _ = _detect(rows, threshold)
     return anomalies
+
+
+def detect_sales_anomalies_with_meta(rows, threshold=DEFAULT_THRESHOLD):
+    """异常检测 + 元信息：返回 {items, skipped, min_samples}。
+
+    供看板接口透出「哪些门店因样本不足被跳过」的说明。
+    """
+    anomalies, skipped = _detect(rows, threshold)
+    return {"items": anomalies, "skipped": skipped, "min_samples": MIN_SAMPLES}

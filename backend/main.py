@@ -2,18 +2,20 @@
 
 启动：uvicorn main:app --reload --port 8000
 """
+import csv
+import io
 import re
 from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel
 
 import db
 from ai.chat import chat as ai_chat
 from ai.chat import chat_stream, sse
-from analytics import detect_sales_anomalies, DEFAULT_THRESHOLD
+from analytics import detect_sales_anomalies_with_meta, DEFAULT_THRESHOLD
 from ratelimit import SlidingWindowLimiter
 
 app = FastAPI(title="Moneki 餐饮看板 API")
@@ -60,6 +62,12 @@ def _parse_range(start, end):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/dashboard/meta")
+def meta():
+    """数据集元信息：最早/最晚交易日期、ETL 最后运行时间。"""
+    return db.get_data_meta()
 
 
 @app.get("/api/dashboard/stores")
@@ -112,8 +120,69 @@ def anomalies(start: str = None, end: str = None, store_id: str = None):
     start, end, err = _parse_range(start, end)
     if err:
         return err
-    items = detect_sales_anomalies(db.get_store_daily_revenue(start, end, store_id))
-    return {"total": len(items), "threshold": DEFAULT_THRESHOLD, "items": items}
+    result = detect_sales_anomalies_with_meta(db.get_store_daily_revenue(start, end, store_id))
+    return {
+        "total": len(result["items"]),
+        "threshold": DEFAULT_THRESHOLD,
+        "items": result["items"],
+        "skipped": result["skipped"],
+        "min_samples": result["min_samples"],
+    }
+
+
+@app.get("/api/dashboard/export")
+def export(start: str = None, end: str = None, store_id: str = None):
+    """导出当前筛选区间的汇总数据为 CSV（概要 + 每日趋势 + 门店/品类排行 + Top10）。"""
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
+
+    summary = db.get_summary(start, end, store_id)
+    daily = db.get_daily(start, end, store_id)
+    store_rank = db.get_store_ranking(start, end)
+    category_rank = db.get_category_ranking(start, end)
+    top = db.get_top10(start, end, store_id)
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+
+    w.writerow(["经营概要"])
+    w.writerow(["总营业额", summary["revenue"]])
+    w.writerow(["订单数", summary["orders"]])
+    w.writerow(["客单价", summary["avg_ticket"]])
+    w.writerow(["退款额", summary["refund"]])
+    w.writerow([])
+
+    w.writerow(["每日经营趋势"])
+    w.writerow(["日期", "营业额", "订单数", "客单价"])
+    for d in daily:
+        w.writerow([d["date"], d["revenue"], d["orders"], d["avg_ticket"]])
+    w.writerow([])
+
+    w.writerow(["门店排行"])
+    w.writerow(["门店", "品类", "地段", "营业额", "订单数"])
+    for s in store_rank:
+        w.writerow([s["store_name"], s["category"], s["district"], s["revenue"], s["orders"]])
+    w.writerow([])
+
+    w.writerow(["品类构成"])
+    w.writerow(["品类", "营业额", "销量"])
+    for c in category_rank:
+        w.writerow([c["product_category"], c["revenue"], c["qty"]])
+    w.writerow([])
+
+    w.writerow(["Top 10 商品"])
+    w.writerow(["商品", "品类", "销量", "营业额"])
+    for p in top:
+        w.writerow([p["product_name"], p["product_category"], p["qty"], p["revenue"]])
+
+    content = "\ufeff" + buf.getvalue()  # UTF-8 BOM，便于 Excel 识别中文
+    filename = f"moneki_dashboard_{start or 'all'}_{end or 'all'}.csv"
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class ChatRequest(BaseModel):
