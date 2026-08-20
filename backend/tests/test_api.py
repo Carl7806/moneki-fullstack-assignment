@@ -61,8 +61,34 @@ def test_anomalies_shape():
     body = client.get("/api/dashboard/anomalies").json()
     assert body["total"] == len(body["items"])
     assert body["threshold"] == 3.0
+    assert body["min_samples"] == 5
+    assert "skipped" in body
     if body["items"]:
         assert set(body["items"][0]) >= {"store_id", "store_name", "date", "revenue", "z_score", "deviation"}
+
+
+def test_meta_shape():
+    body = client.get("/api/dashboard/meta").json()
+    assert set(body) == {"min_date", "max_date", "generated_at"}
+    assert body["min_date"]
+    assert body["max_date"]
+    assert body["generated_at"]
+
+
+def test_export_returns_csv():
+    resp = client.get("/api/dashboard/export")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    assert "moneki_dashboard_" in resp.headers["content-disposition"]
+    text = resp.text
+    assert "经营概要" in text
+    assert "每日经营趋势" in text
+    assert "门店排行" in text
+
+
+def test_export_invalid_date_returns_400():
+    resp = client.get("/api/dashboard/export", params={"start": "2026/01/01"})
+    assert resp.status_code == 400
 
 
 def test_stores_shape():
