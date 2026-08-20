@@ -1,7 +1,10 @@
 <template>
   <div class="top card">
     <h3 class="top__title">Top 10 商品</h3>
-    <div v-if="!data.length" class="muted top__empty">暂无数据</div>
+    <div v-if="loading" class="top__loading">
+      <span v-for="i in 5" :key="i" class="skeleton top__skeleton"></span>
+    </div>
+    <div v-else-if="!data.length" class="muted top__empty">暂无数据</div>
     <table v-else class="top__table">
       <thead>
         <tr>
@@ -36,6 +39,7 @@ import { computed } from 'vue'
 
 const props = defineProps({
   data: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
 })
 
 const max = computed(() => (props.data.length ? props.data[0].revenue : 1))
@@ -51,6 +55,16 @@ const pct = (v) => Math.round((v / max.value) * 100)
 .top__empty {
   padding: 24px 0;
   text-align: center;
+}
+.top__loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+.top__skeleton {
+  display: block;
+  height: 28px;
 }
 .top__table {
   width: 100%;

@@ -3,9 +3,12 @@
     <h3 class="cat__title">品类构成</h3>
     <div class="cat__wrap">
       <div ref="el" class="cat__body"></div>
-      <div v-if="!data.length" class="cat__empty muted">暂无数据</div>
+      <div v-if="loading" class="cat__overlay">
+        <span class="skeleton cat__skeleton"></span>
+      </div>
+      <div v-else-if="!data.length" class="cat__empty muted">暂无数据</div>
     </div>
-    <ul v-if="data.length" class="cat__legend">
+    <ul v-if="!loading && data.length" class="cat__legend">
       <li v-for="c in data" :key="c.product_category" class="cat__legend-item">
         <span class="cat__dot" :style="{ background: color(c.product_category) }"></span>
         <span class="cat__name">{{ c.product_category }}</span>
@@ -21,6 +24,7 @@ import * as echarts from 'echarts'
 
 const props = defineProps({
   data: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
 })
 
 const el = ref(null)
@@ -94,6 +98,18 @@ watch(() => props.data, render, { deep: true })
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.cat__overlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px;
+}
+.cat__skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .cat__legend {
   list-style: none;

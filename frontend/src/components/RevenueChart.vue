@@ -14,7 +14,13 @@
         </button>
       </div>
     </div>
-    <div ref="el" class="chart__body"></div>
+    <div class="chart__wrap">
+      <div ref="el" class="chart__body"></div>
+      <div v-if="loading" class="chart__overlay">
+        <span class="skeleton chart__skeleton"></span>
+      </div>
+      <div v-else-if="!data.length" class="chart__overlay muted">暂无数据</div>
+    </div>
   </div>
 </template>
 
@@ -24,6 +30,7 @@ import * as echarts from 'echarts'
 
 const props = defineProps({
   data: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
 })
 
 const el = ref(null)
@@ -139,5 +146,22 @@ watch(metric, render)
 .chart__body {
   width: 100%;
   height: 320px;
+}
+.chart__wrap {
+  position: relative;
+}
+.chart__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.chart__skeleton {
+  width: 100%;
+  height: 280px;
 }
 </style>

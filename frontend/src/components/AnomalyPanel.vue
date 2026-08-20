@@ -3,15 +3,20 @@
     <div class="anomaly__head">
       <div class="anomaly__title-row">
         <h3 class="anomaly__title">异常销售预警</h3>
-        <span v-if="data.total" class="anomaly__badge">MAD 阈值 {{ data.threshold }}</span>
+        <span v-if="!loading && data.total" class="anomaly__badge">MAD 阈值 {{ data.threshold }}</span>
       </div>
       <div class="anomaly__summary" :class="{ muted: !data.total }">
-        <template v-if="data.total">检测到 <strong>{{ data.total }}</strong> 条营业额异常记录</template>
+        <template v-if="loading"><span class="skeleton anomaly__skeleton-text"></span></template>
+        <template v-else-if="data.total">检测到 <strong>{{ data.total }}</strong> 条营业额异常记录</template>
         <template v-else>当前区间未检测到营业额异常</template>
       </div>
     </div>
 
-    <div v-show="data.total" class="anomaly__body">
+    <div v-if="!loading" class="anomaly__note muted">
+      MAD 修正 z-score 检测 · 阈值 {{ data.threshold }} · 每家店至少 {{ data.min_samples }} 天观测才参与检测<template v-if="data.skipped && data.skipped.length">；另有 {{ data.skipped.length }} 家门店因观测天数不足被跳过</template>。
+    </div>
+
+    <div v-show="!loading && data.total" class="anomaly__body">
       <div ref="el" class="anomaly__chart"></div>
       <table class="anomaly__table">
         <thead>
@@ -42,7 +47,8 @@ import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
 
 const props = defineProps({
-  data: { type: Object, default: () => ({ total: 0, threshold: 2.0, items: [] }) },
+  data: { type: Object, default: () => ({ total: 0, threshold: 3.0, items: [], skipped: [], min_samples: 5 }) },
+  loading: { type: Boolean, default: false },
 })
 
 const el = ref(null)
@@ -164,6 +170,20 @@ watch(() => props.data.total, (t) => {
 }
 .anomaly__summary strong {
   color: var(--danger);
+}
+.anomaly__skeleton-text {
+  display: inline-block;
+  width: 200px;
+  height: 16px;
+}
+.anomaly__note {
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 .anomaly__chart {
   width: 100%;

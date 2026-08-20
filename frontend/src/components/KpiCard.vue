@@ -1,7 +1,10 @@
 <template>
   <div class="kpi card">
     <div class="kpi__label">{{ label }}</div>
-    <div class="kpi__value" :class="{ 'kpi__value--danger': danger }">
+    <div v-if="loading" class="kpi__value">
+      <span class="skeleton kpi__skeleton"></span>
+    </div>
+    <div v-else class="kpi__value" :class="{ 'kpi__value--danger': danger }">
       {{ value }}
     </div>
     <div v-if="sub" class="kpi__sub muted">{{ sub }}</div>
@@ -14,6 +17,7 @@ defineProps({
   value: { type: String, required: true },
   sub: { type: String, default: '' },
   danger: { type: Boolean, default: false },
+  loading: { type: Boolean, default: false },
 })
 </script>
 
@@ -35,6 +39,11 @@ defineProps({
 }
 .kpi__value--danger {
   color: var(--danger);
+}
+.kpi__skeleton {
+  display: inline-block;
+  width: 120px;
+  height: 30px;
 }
 .kpi__sub {
   font-size: 12px;

@@ -3,7 +3,10 @@
     <h3 class="store__title">门店排行</h3>
     <div class="store__wrap">
       <div ref="el" class="store__body"></div>
-      <div v-if="!data.length" class="store__empty muted">暂无数据</div>
+      <div v-if="loading" class="store__overlay">
+        <span class="skeleton store__skeleton"></span>
+      </div>
+      <div v-else-if="!data.length" class="store__empty muted">暂无数据</div>
     </div>
   </div>
 </template>
@@ -14,6 +17,7 @@ import * as echarts from 'echarts'
 
 const props = defineProps({
   data: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
 })
 
 const el = ref(null)
@@ -108,5 +112,17 @@ watch(() => props.data, render, { deep: true })
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.store__overlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px;
+}
+.store__skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 </style>

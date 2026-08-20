@@ -3,8 +3,14 @@
     <header class="header">
       <div>
         <h1 class="header__title">Moneki 连锁餐饮经营看板</h1>
-        <p class="header__sub muted">5 家门店 · POS 销售流水 · 数据区间 2026-05 ~ 2026-07</p>
+        <p class="header__sub muted">
+          5 家门店 · POS 销售流水 · 数据区间 {{ meta.min_date || '…' }} ~ {{ meta.max_date || '…' }}
+          <template v-if="meta.generated_at"> · 更新于 {{ meta.generated_at }}</template>
+        </p>
       </div>
+      <button class="header__export" :disabled="loading" @click="onExport">
+        {{ exporting ? '导出中…' : '导出 CSV' }}
+      </button>
     </header>
 
     <div class="filter card">
@@ -43,22 +49,22 @@
     </div>
 
     <div class="kpis">
-      <KpiCard label="总营业额" :value="fmtMoney(summary.revenue)" sub="含退款抵扣" />
-      <KpiCard label="订单数" :value="fmtNum(summary.orders)" sub="正金额订单" />
-      <KpiCard label="客单价" :value="'¥' + (summary.avg_ticket ?? 0)" sub="营业额 / 订单数" />
-      <KpiCard label="退款额" :value="fmtMoney(summary.refund)" sub="负金额合计" danger />
+      <KpiCard label="总营业额" :value="fmtMoney(summary.revenue)" sub="含退款抵扣" :loading="loading" />
+      <KpiCard label="订单数" :value="fmtNum(summary.orders)" sub="正金额订单" :loading="loading" />
+      <KpiCard label="客单价" :value="'¥' + (summary.avg_ticket ?? 0)" sub="营业额 / 订单数" :loading="loading" />
+      <KpiCard label="退款额" :value="fmtMoney(summary.refund)" sub="负金额合计" danger :loading="loading" />
     </div>
 
-    <RevenueChart :data="daily" />
+    <RevenueChart :data="daily" :loading="loading" />
 
-    <TopProducts :data="top10" />
+    <TopProducts :data="top10" :loading="loading" />
 
     <div class="rankings">
-      <StoreRanking :data="storeRanking" />
-      <CategoryRanking :data="categoryRanking" />
+      <StoreRanking :data="storeRanking" :loading="loading" />
+      <CategoryRanking :data="categoryRanking" :loading="loading" />
     </div>
 
-    <AnomalyPanel :data="anomalies" />
+    <AnomalyPanel :data="anomalies" :loading="loading" />
 
     <ChatPanel @focus="onFocus" />
   </div>
@@ -73,7 +79,7 @@ import StoreRanking from './components/StoreRanking.vue'
 import CategoryRanking from './components/CategoryRanking.vue'
 import AnomalyPanel from './components/AnomalyPanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
-import { fetchSummary, fetchDaily, fetchTop10, fetchAnomalies, fetchStores, fetchStoreRanking, fetchCategoryRanking } from './api.js'
+import { fetchSummary, fetchDaily, fetchTop10, fetchAnomalies, fetchStores, fetchStoreRanking, fetchCategoryRanking, fetchMeta, downloadExport } from './api.js'
 
 const DATA_START = '2026-05-01'
 const DATA_END = '2026-07-31'
@@ -89,7 +95,10 @@ const daily = ref([])
 const top10 = ref([])
 const storeRanking = ref([])
 const categoryRanking = ref([])
-const anomalies = reactive({ total: 0, threshold: 3.0, items: [] })
+const anomalies = reactive({ total: 0, threshold: 3.0, items: [], skipped: [], min_samples: 5 })
+const meta = reactive({ min_date: '', max_date: '', generated_at: '' })
+const loading = ref(false)
+const exporting = ref(false)
 const error = ref('')
 
 const quickRanges = [
@@ -121,6 +130,7 @@ function storeName(id) {
 
 async function load() {
   error.value = ''
+  loading.value = true
   const params = { start: start.value, end: end.value }
   if (storeId.value) params.store_id = storeId.value
   try {
@@ -140,6 +150,23 @@ async function load() {
     Object.assign(anomalies, a)
   } catch (e) {
     error.value = e.message || '加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function onExport() {
+  if (exporting.value) return
+  exporting.value = true
+  error.value = ''
+  const params = { start: start.value, end: end.value }
+  if (storeId.value) params.store_id = storeId.value
+  try {
+    await downloadExport(params)
+  } catch (e) {
+    error.value = e.message || '导出失败'
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -180,6 +207,11 @@ onMounted(async () => {
   } catch (e) {
     /* 门店列表加载失败不阻塞看板 */
   }
+  try {
+    Object.assign(meta, await fetchMeta())
+  } catch (e) {
+    /* 元信息加载失败不阻塞看板 */
+  }
   load()
 })
 </script>
@@ -187,6 +219,10 @@ onMounted(async () => {
 <style scoped>
 .header {
   margin-bottom: 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 .header__title {
   margin: 0 0 4px;
@@ -196,6 +232,25 @@ onMounted(async () => {
 .header__sub {
   margin: 0;
   font-size: 13px;
+}
+.header__export {
+  border: 1px solid var(--brand);
+  background: #fff;
+  color: var(--brand);
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.header__export:hover:not(:disabled) {
+  background: var(--brand);
+  color: #fff;
+}
+.header__export:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .filter {

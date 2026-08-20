@@ -25,6 +25,26 @@ export const fetchAnomalies = (params) => get(`/dashboard/anomalies${buildQuery(
 export const fetchStores = () => get('/dashboard/stores')
 export const fetchStoreRanking = (params) => get(`/dashboard/store_ranking${buildQuery(params)}`)
 export const fetchCategoryRanking = (params) => get(`/dashboard/category_ranking${buildQuery(params)}`)
+export const fetchMeta = () => get('/dashboard/meta')
+
+export async function downloadExport(params) {
+  const res = await fetch(`${BASE}/dashboard/export${buildQuery(params)}`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || `请求失败 (HTTP ${res.status})`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="?([^";]+)"?/)
+  a.download = m ? m[1] : 'moneki_dashboard.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 export async function fetchChat(message, history) {
   const res = await fetch(`${BASE}/chat`, {
