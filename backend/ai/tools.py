@@ -86,6 +86,7 @@ TOOLS = [
                     "product_name": {"type": "string", "description": "商品名关键词，如 牛肉poke"},
                     "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD，可选"},
                     "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD，可选"},
+                    "store_id": {"type": "string", "description": "门店ID，如 S01（回答「某家店xxx」时传入），可选"},
                 },
                 "required": ["product_name"],
             },
@@ -105,6 +106,7 @@ TOOLS = [
                 "properties": {
                     "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD，可选"},
                     "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD，可选"},
+                    "store_id": {"type": "string", "description": "门店ID，如 S01（回答「某家店xxx」时传入），可选"},
                 },
             },
         },
@@ -123,6 +125,7 @@ TOOLS = [
                 "properties": {
                     "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD，可选"},
                     "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD，可选"},
+                    "store_id": {"type": "string", "description": "门店ID，如 S01（回答「某家店xxx」时传入），可选"},
                 },
             },
         },
@@ -167,15 +170,15 @@ def run_tool(name, args):
         if not product_name:
             raise ValueError("product_name 不能为空")
         start, end = _check_range(args.get("start_date"), args.get("end_date"))
-        return db.get_product_sales(product_name, start, end)
+        return db.get_product_sales(product_name, start, end, args.get("store_id"))
 
     if name == "get_daily_trend":
         start, end = _check_range(args.get("start_date"), args.get("end_date"))
-        return db.get_daily(start, end)
+        return db.get_daily(start, end, args.get("store_id"))
 
     if name == "get_sales_anomalies":
         start, end = _check_range(args.get("start_date"), args.get("end_date"))
-        items = detect_sales_anomalies(db.get_store_daily_revenue(start, end))
+        items = detect_sales_anomalies(db.get_store_daily_revenue(start, end, args.get("store_id")))
         return {"total": len(items), "items": items}
 
     raise ValueError(f"未知工具：{name}")

@@ -106,10 +106,36 @@ def _execute_tool_calls(messages, msg, tool_calls_log):
     return events
 
 
+def _derive_focus(tool_calls_log):
+    """从工具调用参数推导图表联动指令：日期区间 + 门店。
+
+    取最后一次出现的 start_date / end_date / store_id（多次调用时以后者为准）。
+    所有维度都缺省时返回 None，表示无需联动。
+    """
+    start = end = store_id = None
+    for tc in tool_calls_log:
+        args = tc.get("args") or {}
+        if args.get("start_date"):
+            start = args["start_date"]
+        if args.get("end_date"):
+            end = args["end_date"]
+        if args.get("store_id"):
+            store_id = args["store_id"]
+    focus = {}
+    if start:
+        focus["start_date"] = start
+    if end:
+        focus["end_date"] = end
+    if store_id:
+        focus["store_id"] = store_id
+    return focus or None
+
+
 def chat(user_message, history=None):
     """执行一次对话。history 为 [{"role":"user"|"assistant","content":...}, ...] 可选。
 
-    返回 {"answer": str, "tool_calls": [{"tool","args","result"}]}
+    返回 {"answer": str, "tool_calls": [...], "focus": {start_date,end_date,store_id} | None}
+    focus 供前端联动：AI 答问涉及的日期区间与门店。
     """
     client = _get_client()
     messages = _build_messages(user_message, history)
@@ -124,10 +150,10 @@ def chat(user_message, history=None):
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:
-            return {"answer": msg.content or "", "tool_calls": tool_calls_log}
+            return {"answer": msg.content or "", "tool_calls": tool_calls_log, "focus": _derive_focus(tool_calls_log)}
         _execute_tool_calls(messages, msg, tool_calls_log)
 
-    return {"answer": "抱歉，问题需要多次查询仍未收敛，请换个更具体的问题。", "tool_calls": tool_calls_log}
+    return {"answer": "抱歉，问题需要多次查询仍未收敛，请换个更具体的问题。", "tool_calls": tool_calls_log, "focus": _derive_focus(tool_calls_log)}
 
 
 def sse(data):
@@ -166,4 +192,4 @@ def chat_stream(user_message, history=None):
         if delta and delta.content:
             yield sse({"type": "delta", "content": delta.content})
 
-    yield sse({"type": "done", "tool_calls": tool_calls_log})
+    yield sse({"type": "done", "tool_calls": tool_calls_log, "focus": _derive_focus(tool_calls_log)})
