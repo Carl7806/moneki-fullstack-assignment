@@ -47,6 +47,8 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 
+const emit = defineEmits(['focus'])
+
 const TOOL_LABELS = {
   get_revenue_summary: '营业额汇总',
   get_store_ranking: '门店排行',
@@ -129,6 +131,7 @@ async function send() {
           assistantMsg.content += data.content
         } else if (data.type === 'done') {
           assistantMsg.tools = data.tool_calls || []
+          if (data.focus) emit('focus', data.focus)
         } else if (data.type === 'error') {
           assistantMsg.content = '出错了：' + data.message
         }
