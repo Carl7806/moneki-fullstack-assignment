@@ -46,12 +46,24 @@ def _date_range(start, end, alias=None):
     return cond, params
 
 
+def _store_filter(cond, params, store_id, alias=None):
+    col = f"{alias}.store_id" if alias else "store_id"
+    if store_id:
+        cond = f"{cond} AND {col} = ?" if cond else f"WHERE {col} = ?"
+        params = list(params) + [store_id]
+    return cond, params
+
+
+def get_stores():
+    """门店维表：store_id / 名称 / 品类 / 地段（供门店筛选与 AI 映射）。"""
+    q = "SELECT store_id, store_name, category, district FROM stores ORDER BY store_id"
+    return [dict(r) for r in _fetch_all(q)]
+
+
 def get_summary(start=None, end=None, store_id=None):
     """总营业额（含退款）、订单数（正金额）、退款额，可选门店过滤。"""
     cond, params = _date_range(start, end)
-    if store_id:
-        cond = f"{cond} AND store_id = ?" if cond else "WHERE store_id = ?"
-        params = list(params) + [store_id]
+    cond, params = _store_filter(cond, params, store_id)
     q = f"""
         SELECT ROUND(SUM(amount), 2) AS revenue,
                COUNT(DISTINCT CASE WHEN amount > 0 THEN order_id END) AS orders,
@@ -70,9 +82,10 @@ def get_summary(start=None, end=None, store_id=None):
     }
 
 
-def get_daily(start=None, end=None):
-    """每日营业额、订单数、客单价（趋势图）。"""
+def get_daily(start=None, end=None, store_id=None):
+    """每日营业额、订单数、客单价（趋势图），可选门店过滤。"""
     cond, params = _date_range(start, end)
+    cond, params = _store_filter(cond, params, store_id)
     q = f"""
         SELECT date,
                ROUND(SUM(amount), 2) AS revenue,
@@ -95,9 +108,10 @@ def get_daily(start=None, end=None):
     return out
 
 
-def get_top10(start=None, end=None):
-    """Top10 商品（按净营业额），JOIN 商品维表取名称/品类。"""
+def get_top10(start=None, end=None, store_id=None):
+    """Top10 商品（按净营业额），JOIN 商品维表取名称/品类，可选门店过滤。"""
     cond, params = _date_range(start, end, alias="s")
+    cond, params = _store_filter(cond, params, store_id, alias="s")
     q = f"""
         SELECT p.product_name, p.product_category,
                ROUND(SUM(s.amount), 2) AS revenue,
@@ -144,15 +158,16 @@ def get_category_ranking(start=None, end=None):
     return [dict(r) for r in _fetch_all(q, params)]
 
 
-def get_product_sales(product_name, start=None, end=None):
-    """单品销售查询：先精确匹配商品名，再模糊匹配（可能存在多商品命中）。"""
+def get_product_sales(product_name, start=None, end=None, store_id=None):
+    """单品销售查询：先精确匹配商品名，再模糊匹配（可能存在多商品命中），可选门店过滤。"""
     cond_date, params = _date_range(start, end, alias="s")
     if cond_date:
         cond_date = cond_date.replace("WHERE", "AND", 1)
 
+    cond_store = "AND s.store_id = ?" if store_id else ""
     cond_name = "AND p.product_name LIKE ?"
-    conds = [cond_date, cond_name] if cond_date else [cond_name]
-    params = params + [f"%{product_name}%"]
+    conds = [c for c in (cond_date, cond_store, cond_name) if c]
+    params = list(params) + ([store_id] if store_id else []) + [f"%{product_name}%"]
 
     q = f"""
         SELECT p.product_name, p.product_category, p.unit_price,
@@ -168,9 +183,10 @@ def get_product_sales(product_name, start=None, end=None):
     return [dict(r) for r in _fetch_all(q, params)]
 
 
-def get_store_daily_revenue(start=None, end=None):
-    """每家店每日营业额（供异常检测与趋势分析）。"""
+def get_store_daily_revenue(start=None, end=None, store_id=None):
+    """每家店每日营业额（供异常检测与趋势分析），可选门店过滤。"""
     cond, params = _date_range(start, end, alias="s")
+    cond, params = _store_filter(cond, params, store_id, alias="s")
     q = f"""
         SELECT st.store_name, s.date, ROUND(SUM(s.amount), 2) AS revenue
         FROM sales s
