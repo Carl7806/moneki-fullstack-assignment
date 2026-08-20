@@ -214,6 +214,67 @@ def test_anomaly_tool_returns_total_and_items():
     assert result["items"] == detect_sales_anomalies(db.get_store_daily_revenue())
 
 
+# ---------- 确定性测试：图表联动（focus 推导） ----------
+
+def test_derive_focus_extracts_date_and_store():
+    from ai.chat import _derive_focus
+    log = [{"tool": "get_revenue_summary", "args": {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"}, "result": {}}]
+    assert _derive_focus(log) == {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"}
+
+
+def test_derive_focus_returns_none_without_dims():
+    from ai.chat import _derive_focus
+    assert _derive_focus([{"tool": "get_store_ranking", "args": {}, "result": []}]) is None
+
+
+def test_chat_returns_focus_for_store_query():
+    def first(kwargs):
+        return _tool_resp("get_revenue_summary", {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"})
+
+    def second(kwargs):
+        return _final_resp("徐汇店六月营业额为 XXX 元")
+
+    fake = FakeClient([first, second])
+    with patch.object(chat_module, "_get_client", return_value=fake):
+        out = chat("徐汇店六月营业额多少？")
+
+    assert out["focus"] == {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"}
+
+
+def test_chat_stream_done_includes_focus():
+    def first(kwargs):
+        return _tool_resp("get_revenue_summary", {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"})
+
+    def loop_again(kwargs):
+        return _Resp(FakeMessage())
+
+    def stream_final(kwargs):
+        return [FakeChunk("ok")]
+
+    fake = FakeClient([first, loop_again, stream_final])
+    with patch.object(chat_module, "_get_client", return_value=fake):
+        events = list(chat_stream("徐汇店六月营业额？"))
+
+    parsed = [json.loads(e[len("data: "):].strip()) for e in events]
+    done = next(p for p in parsed if p["type"] == "done")
+    assert done["focus"] == {"start_date": "2026-06-01", "end_date": "2026-06-30", "store_id": "S01"}
+
+
+# ---------- 确定性测试：门店过滤（看板接口口径） ----------
+
+def test_get_stores_returns_all_five():
+    stores = db.get_stores()
+    assert {s["store_id"] for s in stores} == {"S01", "S02", "S03", "S04", "S05"}
+    assert all("store_name" in s and "category" in s for s in stores)
+
+
+def test_store_filter_daily_matches_summary():
+    rows = db.get_daily("2026-05-01", "2026-07-31", "S01")
+    assert rows
+    total = sum(r["revenue"] for r in rows)
+    assert abs(total - db.get_summary("2026-05-01", "2026-07-31", "S01")["revenue"]) < 0.01
+
+
 # ---------- 集成测试：真实 DeepSeek（需 DEEPSEEK_API_KEY） ----------
 
 REQUIRES_KEY = "DEEPSEEK_API_KEY" in os.environ
