@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from .tools import TOOLS, run_tool, wants_anomaly_check
 
@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 MODEL = "deepseek-chat"
 BASE_URL = "https://api.deepseek.com"
 MAX_TOOL_ROUNDS = 5
+MAX_HISTORY_MESSAGES = 10
 
 SYSTEM_PROMPT = """你是连锁餐饮品牌「Moneki」的运营数据分析助手。你只能基于数据库查询工具返回的真实数据来回答，严禁编造、猜测或凭常识虚报任何数字。
 
@@ -42,14 +43,29 @@ def _get_client():
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY，请在 backend/.env 里设置")
-    return OpenAI(api_key=api_key, base_url=BASE_URL)
+    return OpenAI(api_key=api_key, base_url=BASE_URL, timeout=30.0, max_retries=1)
+
+
+def _sanitize_history(history):
+    """只保留 user/assistant 角色的纯文本消息，并截断到最近 N 条，防止注入与无限膨胀。"""
+    clean = []
+    for m in history or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        content = content.strip()
+        if content:
+            clean.append({"role": role, "content": content})
+    return clean[-MAX_HISTORY_MESSAGES:]
 
 
 def _build_messages(user_message, history):
     """组装 system + 历史 + 当前用户消息。"""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if history:
-        messages.extend(history)
+    messages.extend(_sanitize_history(history))
     messages.append({"role": "user", "content": user_message})
     return messages
 
@@ -143,11 +159,14 @@ def chat(user_message, history=None):
     messages.extend(seed_msgs)
 
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-        )
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=TOOLS,
+            )
+        except OpenAIError as e:
+            raise RuntimeError(f"AI 服务调用失败：{e}") from e
         msg = resp.choices[0].message
         if not msg.tool_calls:
             return {"answer": msg.content or "", "tool_calls": tool_calls_log, "focus": _derive_focus(tool_calls_log)}
@@ -178,7 +197,11 @@ def chat_stream(user_message, history=None):
 
     # 非流式循环：直到模型不再要求调用工具
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS)
+        try:
+            resp = client.chat.completions.create(model=MODEL, messages=messages, tools=TOOLS)
+        except OpenAIError as e:
+            yield sse({"type": "error", "message": f"AI 服务调用失败：{e}"})
+            return
         msg = resp.choices[0].message
         if not msg.tool_calls:
             break
@@ -186,10 +209,18 @@ def chat_stream(user_message, history=None):
             yield sse({"type": "status", **evt})
 
     # 流式输出最终答案（不带 tools，避免再次触发工具调用）
-    stream = client.chat.completions.create(model=MODEL, messages=messages, stream=True)
-    for chunk in stream:
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta and delta.content:
-            yield sse({"type": "delta", "content": delta.content})
+    try:
+        stream = client.chat.completions.create(model=MODEL, messages=messages, stream=True)
+    except OpenAIError as e:
+        yield sse({"type": "error", "message": f"AI 服务调用失败：{e}"})
+        return
+    try:
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield sse({"type": "delta", "content": delta.content})
+    except OpenAIError as e:
+        yield sse({"type": "error", "message": f"AI 服务调用失败：{e}"})
+        return
 
     yield sse({"type": "done", "tool_calls": tool_calls_log, "focus": _derive_focus(tool_calls_log)})

@@ -5,15 +5,16 @@
 import re
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import db
 from ai.chat import chat as ai_chat
 from ai.chat import chat_stream, sse
-from analytics import detect_sales_anomalies
+from analytics import detect_sales_anomalies, DEFAULT_THRESHOLD
+from ratelimit import SlidingWindowLimiter
 
 app = FastAPI(title="Moneki 餐饮看板 API")
 
@@ -26,11 +27,34 @@ app.add_middleware(
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# AI 问答接口防护：限流 + 长度上限
+CHAT_RATE_MAX = 20          # 每个客户端 IP 每分钟最多请求数
+CHAT_RATE_WINDOW = 60       # 滑动窗口秒数
+MAX_MESSAGE_LENGTH = 2000   # 单条问题最大字符数
+
+chat_limiter = SlidingWindowLimiter(CHAT_RATE_MAX, CHAT_RATE_WINDOW)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
 
 def _validate_date(value, name):
     if value is not None and not DATE_RE.match(value):
         raise ValueError(f"{name} 格式应为 YYYY-MM-DD")
     return value
+
+
+def _parse_range(start, end):
+    """校验 start/end 日期参数，返回 (start, end, 错误响应或 None)。"""
+    try:
+        start = _validate_date(start, "start")
+        end = _validate_date(end, "end")
+    except ValueError as e:
+        return None, None, JSONResponse({"error": str(e)}, status_code=400)
+    if start and end and start > end:
+        return None, None, JSONResponse({"error": "start 不能晚于 end"}, status_code=400)
+    return start, end, None
 
 
 @app.get("/api/health")
@@ -45,51 +69,51 @@ def stores():
 
 @app.get("/api/dashboard/summary")
 def summary(start: str = None, end: str = None, store_id: str = None):
-    try:
-        start = _validate_date(start, "start")
-        end = _validate_date(end, "end")
-    except ValueError as e:
-        return {"error": str(e)}, 400
-    if start and end and start > end:
-        return {"error": "start 不能晚于 end"}, 400
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
     return db.get_summary(start, end, store_id)
 
 
 @app.get("/api/dashboard/daily")
 def daily(start: str = None, end: str = None, store_id: str = None):
-    try:
-        start = _validate_date(start, "start")
-        end = _validate_date(end, "end")
-    except ValueError as e:
-        return {"error": str(e)}, 400
-    if start and end and start > end:
-        return {"error": "start 不能晚于 end"}, 400
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
     return db.get_daily(start, end, store_id)
 
 
 @app.get("/api/dashboard/top10")
 def top10(start: str = None, end: str = None, store_id: str = None):
-    try:
-        start = _validate_date(start, "start")
-        end = _validate_date(end, "end")
-    except ValueError as e:
-        return {"error": str(e)}, 400
-    if start and end and start > end:
-        return {"error": "start 不能晚于 end"}, 400
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
     return db.get_top10(start, end, store_id)
+
+
+@app.get("/api/dashboard/store_ranking")
+def store_ranking(start: str = None, end: str = None):
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
+    return db.get_store_ranking(start, end)
+
+
+@app.get("/api/dashboard/category_ranking")
+def category_ranking(start: str = None, end: str = None):
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
+    return db.get_category_ranking(start, end)
 
 
 @app.get("/api/dashboard/anomalies")
 def anomalies(start: str = None, end: str = None, store_id: str = None):
-    try:
-        start = _validate_date(start, "start")
-        end = _validate_date(end, "end")
-    except ValueError as e:
-        return {"error": str(e)}, 400
-    if start and end and start > end:
-        return {"error": "start 不能晚于 end"}, 400
+    start, end, err = _parse_range(start, end)
+    if err:
+        return err
     items = detect_sales_anomalies(db.get_store_daily_revenue(start, end, store_id))
-    return {"total": len(items), "threshold": 2.0, "items": items}
+    return {"total": len(items), "threshold": DEFAULT_THRESHOLD, "items": items}
 
 
 class ChatRequest(BaseModel):
@@ -98,16 +122,30 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest, request: Request):
+    if not chat_limiter.allow(_client_ip(request)):
+        return JSONResponse({"error": "请求过于频繁，请稍后再试", "answer": None, "tool_calls": []}, status_code=429)
+    if len(req.message) > MAX_MESSAGE_LENGTH:
+        return JSONResponse({"error": f"问题过长（最多 {MAX_MESSAGE_LENGTH} 字符）", "answer": None, "tool_calls": []}, status_code=400)
     try:
         result = ai_chat(req.message, req.history)
         return result
     except RuntimeError as e:
-        return {"error": str(e), "answer": None, "tool_calls": []}, 500
+        return JSONResponse({"error": str(e), "answer": None, "tool_calls": []}, status_code=500)
 
 
 @app.post("/api/chat/stream")
-def chat_stream_endpoint(req: ChatRequest):
+def chat_stream_endpoint(req: ChatRequest, request: Request):
+    if not chat_limiter.allow(_client_ip(request)):
+        def _limited():
+            yield sse({"type": "error", "message": "请求过于频繁，请稍后再试"})
+        return StreamingResponse(_limited(), media_type="text/event-stream")
+
+    if len(req.message) > MAX_MESSAGE_LENGTH:
+        def _too_long():
+            yield sse({"type": "error", "message": f"问题过长（最多 {MAX_MESSAGE_LENGTH} 字符）"})
+        return StreamingResponse(_too_long(), media_type="text/event-stream")
+
     def gen():
         try:
             for chunk in chat_stream(req.message, req.history):

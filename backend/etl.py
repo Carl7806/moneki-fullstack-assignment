@@ -18,8 +18,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 DB_PATH = os.path.join(BASE_DIR, "app.db")
 
-VALID_STORES = {"S01", "S02", "S03", "S04", "S05"}
-
 
 def parse_date(raw: str):
     """归一化日期为 YYYY-MM-DD，无法识别返回 None。"""
@@ -53,7 +51,7 @@ def load_csv(name):
         return list(csv.DictReader(f))
 
 
-def clean_sales(raw_rows, product_price, stats):
+def clean_sales(raw_rows, product_price, valid_stores, stats):
     cleaned = []
     seen = set()
     for r in raw_rows:
@@ -70,7 +68,7 @@ def clean_sales(raw_rows, product_price, stats):
             continue
 
         # 脏外键剔除
-        if store_id not in VALID_STORES:
+        if store_id not in valid_stores:
             stats["drop_bad_store"] += 1
             continue
         if product_id not in product_price:
@@ -136,8 +134,11 @@ def run():
         except ValueError:
             product_price[p["product_id"].strip()] = 0.0
 
+    # 合法门店集合：动态来自 stores.csv，避免硬编码导致换数据后漏清洗
+    valid_stores = {s["store_id"].strip().upper() for s in stores}
+
     stats["raw_sales_rows"] = len(sales)
-    clean_rows = clean_sales(sales, product_price, stats)
+    clean_rows = clean_sales(sales, product_price, valid_stores, stats)
     stats["clean_sales_rows"] = len(clean_rows)
 
     # 建库
@@ -169,9 +170,10 @@ def run():
             (s["store_id"].strip(), s["store_name"].strip(), s["category"].strip(), s["district"].strip()),
         )
     for p in products:
+        pid = p["product_id"].strip()
         cur.execute(
             "INSERT INTO products VALUES (?,?,?,?)",
-            (p["product_id"].strip(), p["product_name"].strip(), p["product_category"].strip(), float(p["unit_price"])),
+            (pid, p["product_name"].strip(), p["product_category"].strip(), product_price[pid]),
         )
     cur.executemany("INSERT INTO sales VALUES (?,?,?,?,?,?,?)", clean_rows)
 

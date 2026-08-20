@@ -184,15 +184,18 @@ def get_product_sales(product_name, start=None, end=None, store_id=None):
 
 
 def get_store_daily_revenue(start=None, end=None, store_id=None):
-    """每家店每日营业额（供异常检测与趋势分析），可选门店过滤。"""
+    """每家店每日营业额（供异常检测与趋势分析），可选门店过滤。
+
+    同时返回 store_id 与 store_name，异常检测按 store_id 分组，避免门店同名/改名时错误合并。
+    """
     cond, params = _date_range(start, end, alias="s")
     cond, params = _store_filter(cond, params, store_id, alias="s")
     q = f"""
-        SELECT st.store_name, s.date, ROUND(SUM(s.amount), 2) AS revenue
+        SELECT st.store_id, st.store_name, s.date, ROUND(SUM(s.amount), 2) AS revenue
         FROM sales s
         JOIN stores st ON s.store_id = st.store_id
         {cond}
-        GROUP BY s.store_id, s.date
-        ORDER BY s.store_id, s.date
+        GROUP BY st.store_id, s.date
+        ORDER BY st.store_id, s.date
     """
     return [dict(r) for r in _fetch_all(q, params)]
