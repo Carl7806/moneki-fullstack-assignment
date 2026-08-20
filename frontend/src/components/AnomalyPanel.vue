@@ -3,7 +3,7 @@
     <div class="anomaly__head">
       <div class="anomaly__title-row">
         <h3 class="anomaly__title">异常销售预警</h3>
-        <span v-if="data.total" class="anomaly__badge">阈值 {{ data.threshold }}σ</span>
+        <span v-if="data.total" class="anomaly__badge">MAD 阈值 {{ data.threshold }}</span>
       </div>
       <div class="anomaly__summary" :class="{ muted: !data.total }">
         <template v-if="data.total">检测到 <strong>{{ data.total }}</strong> 条营业额异常记录</template>
@@ -11,7 +11,7 @@
       </div>
     </div>
 
-    <div v-if="data.total" class="anomaly__body">
+    <div v-show="data.total" class="anomaly__body">
       <div ref="el" class="anomaly__chart"></div>
       <table class="anomaly__table">
         <thead>
@@ -38,7 +38,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
 
 const props = defineProps({
@@ -60,7 +60,11 @@ function tagClass(deviation) {
 }
 
 function render() {
-  if (!props.data.total) return
+  if (!props.data.total || !el.value) return
+  if (!chart && (!el.value.clientWidth || !el.value.clientHeight)) {
+    nextTick(render)
+    return
+  }
   if (!chart) chart = echarts.init(el.value)
 
   // 取 |z| 最大的前 15 条画条形图，最高 |z| 显示在最上方
@@ -117,7 +121,15 @@ onBeforeUnmount(() => {
   chart && chart.dispose()
 })
 
-watch(() => props.data, render, { deep: true })
+watch(() => props.data, render, { deep: true, flush: 'post' })
+
+// total 归零时销毁图表实例，避免下一次空→非空切换时图表还绑在已卸载的旧 DOM 上
+watch(() => props.data.total, (t) => {
+  if (!t && chart) {
+    chart.dispose()
+    chart = null
+  }
+})
 </script>
 
 <style scoped>

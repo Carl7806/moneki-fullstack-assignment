@@ -53,6 +53,11 @@
 
     <TopProducts :data="top10" />
 
+    <div class="rankings">
+      <StoreRanking :data="storeRanking" />
+      <CategoryRanking :data="categoryRanking" />
+    </div>
+
     <AnomalyPanel :data="anomalies" />
 
     <ChatPanel @focus="onFocus" />
@@ -64,9 +69,11 @@ import { ref, reactive, watch, onMounted } from 'vue'
 import KpiCard from './components/KpiCard.vue'
 import RevenueChart from './components/RevenueChart.vue'
 import TopProducts from './components/TopProducts.vue'
+import StoreRanking from './components/StoreRanking.vue'
+import CategoryRanking from './components/CategoryRanking.vue'
 import AnomalyPanel from './components/AnomalyPanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
-import { fetchSummary, fetchDaily, fetchTop10, fetchAnomalies, fetchStores } from './api.js'
+import { fetchSummary, fetchDaily, fetchTop10, fetchAnomalies, fetchStores, fetchStoreRanking, fetchCategoryRanking } from './api.js'
 
 const DATA_START = '2026-05-01'
 const DATA_END = '2026-07-31'
@@ -80,7 +87,9 @@ const suppress = ref(false)
 const summary = reactive({ revenue: 0, orders: 0, avg_ticket: 0, refund: 0 })
 const daily = ref([])
 const top10 = ref([])
-const anomalies = reactive({ total: 0, threshold: 2.0, items: [] })
+const storeRanking = ref([])
+const categoryRanking = ref([])
+const anomalies = reactive({ total: 0, threshold: 3.0, items: [] })
 const error = ref('')
 
 const quickRanges = [
@@ -115,15 +124,19 @@ async function load() {
   const params = { start: start.value, end: end.value }
   if (storeId.value) params.store_id = storeId.value
   try {
-    const [s, d, t, a] = await Promise.all([
+    const [s, d, t, a, sr, cr] = await Promise.all([
       fetchSummary(params),
       fetchDaily(params),
       fetchTop10(params),
       fetchAnomalies(params),
+      fetchStoreRanking(params),
+      fetchCategoryRanking(params),
     ])
     Object.assign(summary, s)
     daily.value = d
     top10.value = t
+    storeRanking.value = sr
+    categoryRanking.value = cr
     Object.assign(anomalies, a)
   } catch (e) {
     error.value = e.message || '加载失败'
@@ -272,6 +285,13 @@ onMounted(async () => {
   width: 100%;
 }
 
+.rankings {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
 .dashboard .chart {
   margin-bottom: 20px;
 }
@@ -279,6 +299,9 @@ onMounted(async () => {
 @media (max-width: 760px) {
   .kpis {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .rankings {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -23,6 +23,8 @@ export const fetchDaily = (params) => get(`/dashboard/daily${buildQuery(params)}
 export const fetchTop10 = (params) => get(`/dashboard/top10${buildQuery(params)}`)
 export const fetchAnomalies = (params) => get(`/dashboard/anomalies${buildQuery(params)}`)
 export const fetchStores = () => get('/dashboard/stores')
+export const fetchStoreRanking = (params) => get(`/dashboard/store_ranking${buildQuery(params)}`)
+export const fetchCategoryRanking = (params) => get(`/dashboard/category_ranking${buildQuery(params)}`)
 
 export async function fetchChat(message, history) {
   const res = await fetch(`${BASE}/chat`, {
